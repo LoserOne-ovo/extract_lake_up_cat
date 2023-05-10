@@ -79,6 +79,65 @@ def get_outlet(lake_shp):
     return corList
 
 
+def reset_lake_value(lake_shp, lake_value):
+
+    ds = ogr.Open(lake_shp, 1)
+    layer = ds.GetLayer()
+    for feature in layer:
+        feature.SetField(0, lake_value)
+    layer.SyncToDisk()
+    ds.Destroy()
+
+
+def merge_result(lake_num, out_folder):
+
+    in_fn = os.path.join(out_folder, "lake_1.shp")
+    inDs = ogr.Open(in_fn)
+    inLayer = inDs.GetLayer()
+    srs = inLayer.GetSpatialRef()
+    inDs.Destroy()
+
+    out_fn = os.path.join(out_folder, "lake_0.shp")
+    driver = ogr.GetDriverByName("ESRI Shapefile")
+    outDs = driver.CreateDataSource(out_fn)
+    outLayer = outDs.CreateLayer("lake_catchment", srs=srs, geom_type=ogr.wkbMultiPolygon)
+    fieldDefn = ogr.FieldDefn("LakeID", ogr.OFTInteger)
+    outLayer.CreateField(fieldDefn)
+    outLayerDefn = outLayer.GetLayerDefn()
+
+    for i in range(1, lake_num + 1):
+        in_fn = os.path.join(out_folder, "lake_%d.shp" % i)
+        inDs = ogr.Open(in_fn)
+        inLayer = inDs.GetLayer()
+        featureCount = inLayer.GetFeatureCount()
+        # 如果只有一个feature
+        if featureCount == 1:
+            feature = inLayer.GetFeature(0)
+            geom = feature.GetGeometryRef()
+            geom_type = geom.GetGeometryType()
+            if geom_type == 3:
+                outGeom = ogr.ForceToMultiPolygon(geom)
+            else:
+                outGeom = geom
+        # 如果有多个feature
+        else:
+            outGeom = ogr.Geometry(ogr.wkbMultiPolygon)
+            for feature in inLayer:
+                geom = feature.GetGeometryRef()
+                outGeom.AddGeometry(geom)
+            outGeom = outGeom.UnionCascaded()
+        # 释放内存
+        inDs.Destroy()
+        # 生成新的feature
+        outFeature = ogr.Feature(outLayerDefn)
+        outFeature.SetGeometry(outGeom)
+        outFeature.SetField("LakeID", i)
+
+    # 保存结果
+    outLayer.SyncToDisk()
+    outDs.Destory()
+
+
 def workflow_2(lake_shp, dir_tif, out_folder):
 
     # 检查输入的湖泊数据是否为面状要素
@@ -119,6 +178,8 @@ def workflow_2(lake_shp, dir_tif, out_folder):
         # 计算湖泊完整流域的范围
         lake_catchment_envelopes[:, 0] = rows
         lake_catchment_envelopes[:, 1] = cols
+        lake_catchment_envelopes[:, 2] = 0
+        lake_catchment_envelopes[:, 3] = 0
         cfunc.get_basin_envelopes(lake_catchment_arr, lake_catchment_envelopes)
         # 计算湖泊完整流域的地理参考
         min_row, min_col, max_row, max_col = lake_catchment_envelopes[1]
@@ -128,9 +189,14 @@ def workflow_2(lake_shp, dir_tif, out_folder):
         # 将湖泊完整流域转为化矢量
         out_fn = os.path.join(out_folder, "lake_%d.shp" % i)
         raster.raster2shp_mem(out_fn, out_arr, sub_geo_trans, proj, nd_value=0, dtype=1)
+        # 更改湖泊矢量的属性
+        reset_lake_value(out_fn, i)
 
-        # 恢复
+        # 重置湖泊流域范围
         out_arr[:, :] = 0
+
+    # 合并湖泊流域结果至一个矢量文件中
+    merge_result(lake_num, out_folder)
 
 
 def workflow_1(lake_shp, dir_tif, out_folder):
@@ -160,6 +226,7 @@ def workflow_1(lake_shp, dir_tif, out_folder):
     colors = np.ones((1,), dtype=np.uint8)
     i = 1
     for ridx, cidx in idxList:
+
         # 追踪湖泊流域范围
         idxs[0] = int(ridx * cols + cidx)
         cfunc.paint_up_uint8(idxs, colors, re_dir_arr, lake_catchment_arr)
