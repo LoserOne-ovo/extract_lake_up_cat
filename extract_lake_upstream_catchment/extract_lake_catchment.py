@@ -132,10 +132,11 @@ def merge_result(lake_num, out_folder):
         outFeature = ogr.Feature(outLayerDefn)
         outFeature.SetGeometry(outGeom)
         outFeature.SetField("LakeID", i)
+        outLayer.CreateFeature(outFeature)
 
     # 保存结果
     outLayer.SyncToDisk()
-    outDs.Destory()
+    outDs.Destroy()
 
 
 def workflow_2(lake_shp, dir_tif, out_folder):
